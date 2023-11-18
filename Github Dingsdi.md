@@ -1,0 +1,231 @@
+---
+title: "Soccer Analytics Student Challenge"
+author: "Paul Schlossmacher"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document: default
+  github_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+\tableofcontents
+\newpage
+
+```{r}
+library(rjson)
+library(tidyverse)
+library(dplyr)
+library("StatsBombR")
+library(chron)
+library(lubridate)
+```
+
+# Import data
+
+```{r}
+Comps<-FreeCompetitions()
+# To get the Men's games:
+Matches<-FreeMatches("FIFA World Cup")
+Comp <- FreeCompetitions() %>%
+filter(competition_id==43 & season_id==106)
+Matches <- FreeMatches(Comp)
+StatsBombData <- free_allevents(MatchesDF = Matches, Parallel = T) #4
+StatsBombData = allclean(StatsBombData) 
+df<-StatsBombData
+
+# To get the Women's games:
+CompWomen <- FreeCompetitions() %>%
+filter(competition_id==72 & season_id==107)
+MatchesWomen <- FreeMatches(CompWomen)
+StatsBombDataW <- free_allevents(MatchesDF = MatchesWomen, Parallel = T) #4
+dfw = allclean(StatsBombDataW) 
+```
+
+# Count number of fouls per game for women's and men's matches:
+
+
+First we write a function that gives us the number of seconds played per match_id:
+
+```{r}
+M_ForMinutes<-df[,c(3,5,6,118)]
+W_ForMinutes<-dfw[,c(3,5,6,115)]
+
+# This function needs an input, that has the following columns: 
+#period, minute, second, match_id
+
+MinutesPlayed<-function(test){
+
+test$MinSecs<-(test$minute*60+test$second)/60
+
+result_df <- test %>%
+  group_by(match_id, period) %>%
+  summarise(max_minute = max(MinSecs))
+
+result_df<-as.data.frame(result_df)
+
+#Exclude penalties
+result_df<-result_df[result_df$period!=5,]
+#Modify values for minutes so that we can sum the minutes up properly:
+result_df[(result_df$period==2),]$max_minute<-
+  result_df[(result_df$period==2),]$max_minute-45
+result_df[(result_df$period==3),]$max_minute<-
+  result_df[(result_df$period==3),]$max_minute-90
+result_df[(result_df$period==4),]$max_minute<-
+  result_df[(result_df$period==4),]$max_minute-105
+
+TotalMinsbyMatchId<-aggregate(max_minute ~ match_id, data = result_df, FUN = sum)
+return(TotalMinsbyMatchId)  
+}
+
+```
+Now we write a function which gives us the number of fouls in each game and joins it with the number of minutes in these games:
+
+```{r}
+Fouls<-function(df){
+  FoulsCommitted<-df[(df$type.name=="Foul Committed"),]
+  FoulsCommittedOnlyMI<-FoulsCommitted$match_id
+  M_NumFouls<-as.data.frame(table(FoulsCommittedOnlyMI)) 
+  colnames(M_NumFouls)<-c("match_id", "NumFouls")
+  return(M_NumFouls)
+}
+
+```
+
+Finally we want to join the number of minutes with the number of Fouls:
+
+```{r}
+FoulsPerMin<-function(df, df_ForMinutes){
+  Fouls<-Fouls(df)
+  Mins<-MinutesPlayed(df_ForMinutes)
+  Output<-merge(Fouls,Mins, by="match_id")
+  Output$FoulsPerMin<-Output$NumFouls/Output$max_minute
+  return(Output)
+}
+
+M_FoulsPerMin<-FoulsPerMin(df, M_ForMinutes)
+W_FoulsPerMin<-FoulsPerMin(dfw, W_ForMinutes)
+
+mean(M_FoulsPerMin$FoulsPerMin)
+mean(W_FoulsPerMin$FoulsPerMin)
+```
+The means do seem to be substantially different. Now we run a test to see whether the results are statistically significantly different:
+
+```{r}
+t.test(x=M_FoulsPerMin$FoulsPerMin, y=W_FoulsPerMin$FoulsPerMin, alternative="two.sided")
+```
+It definitely does seem like there is a big difference. Now we also test the model assumptions:
+
+```{r}
+diff<-M_FoulsPerMin$FoulsPerMin-W_FoulsPerMin$FoulsPerMin
+
+qqnorm(diff)
+```
+The data seems to be nicely normally distributed, which is good.
+
+
+# Analyzing time differences between fouls being won and free kicks:
+
+To get a better overview, we'll create some dataframes with the different entries:
+```{r}
+Play_pattern.names<-as.data.frame(unique(df$play_pattern.name))
+# We want to get the index, type.name, play_pattern.name and match_id
+data<-df[,c(2,16,20,118)]
+data$MI<-paste(data$match_id,"-",data$index)
+
+# Filter rows where type.name is "Foul Won"
+foul_rows <- data %>%
+  filter(type.name == "Foul Won")
+
+# Create a new data frame with the next 5 rows for each foul row and the same match_id
+result_df <- data %>%
+  filter(match_id %in% foul_rows$match_id & index %in% (foul_rows$index + 1):(foul_rows$index + 5))
+
+
+
+# Print the result
+
+```
+
+Try sth else with passes or shots from free-kicks:
+
+```{r}
+# Need the columns "index", "timestamp", "type.name", "play_pattern.name", "pass.type.id", "shot.type.id", "match_id"
+
+M_TWData<-df[,c(2,4,16,20,49,77,118)]
+W_TWData<-dfw[,c(2,4,16,20,48,84,115)]
+
+TimeWasted<-function(data){
+  FK_rows <- data %>%
+  filter(pass.type.id == 62 | shot.type.id==62)
+
+  #To get the 4 anterior indices
+  v<-c(FK_rows$index)
+  a<-c()
+  for (i in v){
+    b<-(i-1):i
+    a<-append(a,b)
+  }
+  
+  #Create a vector, which replicates the match_ids an additional time, to align
+  # with the additional anterior index:
+  MIdNew <- rep(c(FK_rows$match_id), each = 2)
+  
+  #Now get these rows from the big dataframe:
+  Ids<-data.frame(a, MIdNew)
+  colnames(Ids)<-c("index","match_id")
+  
+  
+  FKArows<-inner_join(Ids, data, by=c("index", "match_id"))
+  FKArows<-FKArows[(FKArows$type.name=="Foul Won" | FKArows$play_pattern.name=="From Free Kick"),]
+  FKArows$TimeDiff<-rep(NA, dim(FKArows)[1])
+  
+  
+  for (i in 2:dim(FKArows)[1]){
+    if(FKArows$type.name[i-1]=="Foul Won" && FKArows$play_pattern.name[i]=="From Free Kick"){
+      FKArows$TimeDiff[i]<-
+        as.numeric(hms(times(FKArows$timestamp[i]))-hms(times(FKArows$timestamp[i-1])))
+    }
+  }
+  
+#  M_TimeWasted<-aggregate(TimeDiff ~ match_id, data = FKArows, FUN = mean, na.rm=TRUE)
+  return(FKArows)
+}
+
+M_TimeWasted<-TimeWasted(M_TWData)
+W_TimeWasted<-TimeWasted(W_TWData)
+
+median(M_TimeWasted$TimeDiff, na.rm=TRUE)
+median(W_TimeWasted$TimeDiff, na.rm=TRUE)
+
+M_TWfull<-M_TimeWasted[complete.cases(M_TimeWasted[ ,8]),]
+W_TWfull<-W_TimeWasted[complete.cases(W_TimeWasted[ ,8]),]
+
+```
+
+Let's create some histograms to explore the data:
+
+```{r}
+hist(M_TWfull$TimeDiff, col='red', xlim=c(0, 150), main='Multiple Histograms', xlab='x')
+hist(W_TWfull$TimeDiff, col='green', add=TRUE)
+
+#add legend
+legend('topright', c('Men', 'Women'), fill=c('red', 'green'))
+```
+
+
+```{r}
+# Assuming M_TWfull and W_TWfull are your data frames
+
+# Create density estimates
+density_M <- density(M_TWfull$TimeDiff, na.rm = TRUE)
+density_W <- density(W_TWfull$TimeDiff, na.rm = TRUE)
+
+# Plot the density estimates
+plot(density_M, col = "red", xlim = c(0, 150), main = "Time between Foul and Free Kick in seconds", xlab = "x", lwd = 2)
+lines(density_W, col = "green", lwd = 2)
+legend("topright", legend = c("M_TWfull", "W_TWfull"), col = c("red", "green"), lty = 1, lwd = 2)
+
+```
