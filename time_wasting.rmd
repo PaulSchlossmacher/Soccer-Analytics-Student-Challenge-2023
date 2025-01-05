@@ -2,7 +2,9 @@
 title: "Soccer Analytics Student Challenge"
 author: "Paul Schlossmacher"
 date: "`r format(Sys.time(), '%d %B, %Y')`"
-output: pdf_document
+output:
+  pdf_document: default
+  github_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -12,10 +14,11 @@ knitr::opts_chunk$set(echo = TRUE)
 \tableofcontents
 \newpage
 
-```{r}
+```{r warning=FALSE}
 library(rjson)
 library(tidyverse)
 library(dplyr)
+#devtools::install_github("statsbomb/StatsBombR")
 library("StatsBombR")
 library(chron)
 library(lubridate)
@@ -23,12 +26,11 @@ library(lubridate)
 
 # Import data
 
-```{r}
+```{r message=FALSE}
 Comps<-FreeCompetitions()
 # To get the Men's games:
-Matches<-FreeMatches("FIFA World Cup")
 Comp <- FreeCompetitions() %>%
-filter(competition_id==43 & season_id==106)
+  filter(competition_id==43 & season_id==106)
 Matches <- FreeMatches(Comp)
 StatsBombData <- free_allevents(MatchesDF = Matches, Parallel = T) #4
 StatsBombData = allclean(StatsBombData) 
@@ -112,7 +114,8 @@ mean(W_FoulsPerMin$FoulsPerMin)
 The means do seem to be substantially different. Now we run a test to see whether the results are statistically significantly different:
 
 ```{r}
-t.test(x=M_FoulsPerMin$FoulsPerMin, y=W_FoulsPerMin$FoulsPerMin, alternative="two.sided")
+t.test(x=M_FoulsPerMin$FoulsPerMin, y=W_FoulsPerMin$FoulsPerMin,
+       alternative="two.sided")
 ```
 It definitely does seem like there is a big difference. Now we also test the model assumptions:
 
@@ -139,18 +142,17 @@ foul_rows <- data %>%
 
 # Create a new data frame with the next 5 rows for each foul row and the same match_id
 result_df <- data %>%
-  filter(match_id %in% foul_rows$match_id & index %in% (foul_rows$index + 1):(foul_rows$index + 5))
+  filter(match_id %in% foul_rows$match_id &
+           index %in% (foul_rows$index + 1):(foul_rows$index + 5))
 
-
-
-# Print the result
 
 ```
 
 Try sth else with passes or shots from free-kicks:
 
 ```{r}
-# Need the columns "index", "timestamp", "type.name", "play_pattern.name", "pass.type.id", "shot.type.id", "match_id"
+# Need these columns
+#"index", "timestamp", "type.name", "play_pattern.name", "pass.type.id", "shot.type.id", "match_id"
 
 M_TWData<-df[,c(2,4,16,20,49,77,118)]
 W_TWData<-dfw[,c(2,4,16,20,48,84,115)]
@@ -224,7 +226,6 @@ density_W <- density(W_TWfull$TimeDiff, na.rm = TRUE)
 # Plot the density estimates
 plot(density_M, col = "red", xlim = c(0, 150), main = "Time between Foul and Free Kick in seconds", xlab = "x", lwd = 2)
 lines(density_W, col = "green", lwd = 2)
-legend("topright", legend = c("M_TWfull", "W_TWfull"), col = c("red", "green"), lty = 1, lwd = 2)
+legend("topright", legend = c("Men", "Women"), col = c("red", "green"), lty = 1, lwd = 2)
 
 ```
-
